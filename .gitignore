@@ -1,0 +1,6 @@
+*checkpoints
+*.csv*
+*.xlsx*
+*_SUCCESS*
+*.pkl
+*pycache*
