@@ -1,0 +1,247 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - credit_risk_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.3
+    container_name: zookeeper
+    networks:
+      - credit_risk_network
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.3
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    networks:
+      - credit_risk_network
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka:29092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  api:
+    build: ./api
+    container_name: credit_risk_api
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - credit_risk_network
+    ports:
+      - "8000:8000"
+    environment:
+      KAFKA_BROKER: kafka:29092
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./api:/app
+    command: python main.py
+
+  spark-streaming:
+    build:
+      context: ./spark
+    container_name: spark_streaming
+    depends_on:
+      - spark-master
+      - kafka
+    networks:
+      - credit_risk_network
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - KAFKA_BROKER=kafka:29092
+    volumes:
+      - ./spark:/home/jovyan/work/spark
+      - ./model:/home/jovyan/work/model
+
+
+  dashboard:
+    build: ./app
+    container_name: dashboard
+    ports:
+      - "5000:5000"
+    depends_on:
+      - kafka
+    networks:
+      - credit_risk_network
+    environment:
+      - KAFKA_BROKER=kafka:29092
+    volumes:
+      - ./app/templates:/app/templates
+    command: ["uvicorn", "dashboard_app:socket_app", "--host", "0.0.0.0", "--port", "5000", "--reload"]
+
+  jupyter:
+    build: ./docker/jupyter_pyspark
+    container_name: jupyter_notebook
+    networks:
+      - credit_risk_network
+    ports:
+      - "8888:8888"
+    command: ["start-notebook.sh"]
+    volumes:
+      - ./notebooks:/home/jovyan/work/notebooks
+      - ./data:/home/jovyan/work/data
+      - ./model/:/home/jovyan/work/model
+    environment:
+      - JUPYTER_TOKEN=supersecret
+
+  namenode:
+    build: ./docker/namenode
+    container_name: namenode
+    networks:
+      - credit_risk_network
+    volumes:
+      - hadoop_namenode:/hadoop/dfs/name
+    environment:
+      - CLUSTER_NAME=test
+    env_file:
+      - ./hadoop.env
+    ports:
+      - "9870:9870"
+
+  resourcemanager:
+    build: ./docker/resourcemanager
+    container_name: resourcemanager
+    networks:
+      - credit_risk_network
+    restart: on-failure
+    depends_on:
+      - namenode
+      - datanode1
+      - datanode2
+    env_file:
+      - ./hadoop.env
+    ports:
+      - "8089:8088"
+
+  nodemanager:
+    build: ./docker/nodemanager
+    container_name: nodemanager
+    networks:
+      - credit_risk_network
+    depends_on:
+      - namenode
+      - datanode1
+      - datanode2
+    env_file:
+      - ./hadoop.env
+    ports:
+      - "8042:8042"
+
+  historyserver:
+    build: ./docker/historyserver
+    container_name: historyserver
+    networks:
+      - credit_risk_network
+    depends_on:
+      - namenode
+      - datanode1
+      - datanode2
+    volumes:
+      - hadoop_historyserver:/hadoop/yarn/timeline
+    env_file:
+      - ./hadoop.env
+    ports:
+      - "8188:8188"
+
+  datanode1:
+    build: ./docker/datanode
+    container_name: datanode1
+    networks:
+      - credit_risk_network
+    restart: always
+    depends_on:
+      - namenode
+    volumes:
+      - hadoop_datanode1:/hadoop/dfs/data
+    env_file:
+      - ./hadoop.env
+
+  datanode2:
+    build: ./docker/datanode
+    container_name: datanode2
+    networks:
+      - credit_risk_network
+    restart: always
+    depends_on:
+      - namenode
+    volumes:
+      - hadoop_datanode2:/hadoop/dfs/data
+    env_file:
+      - ./hadoop.env
+
+  spark-master:
+    image: bde2020/spark-master:3.2.1-hadoop3.2
+    container_name: spark-master
+    networks:
+      - credit_risk_network
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    env_file:
+      - ./hadoop.env
+
+  spark-worker:
+    image: bde2020/spark-worker:3.2.1-hadoop3.2
+    container_name: spark-worker
+    networks:
+      - credit_risk_network
+    depends_on:
+      - spark-master
+    ports:
+      - "8081:8081"
+    env_file:
+      - ./hadoop.env
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+
+volumes:
+  hadoop_namenode:
+  hadoop_datanode1:
+  hadoop_datanode2:
+  hadoop_historyserver:
+
+networks:
+  credit_risk_network:
+    driver: bridge
