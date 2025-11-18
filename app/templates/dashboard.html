@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loan Prediction Dashboard</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .connection-status {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .status-connected {
+            background: #10b981;
+            color: white;
+        }
+
+        .status-disconnected {
+            background: #ef4444;
+            color: white;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            color: #333;
+            font-size: 32px;
+            font-weight: bold;
+        }
+
+        .stat-good {
+            color: #10b981;
+        }
+
+        .stat-bad {
+            color: #ef4444;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+        }
+
+        .card-title {
+            font-size: 20px;
+            color: #333;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .latest-item {
+            padding: 15px;
+            margin-bottom: 10px;
+            background: #f9fafb;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .latest-item.good {
+            border-left-color: #10b981;
+        }
+
+        .latest-item.bad {
+            border-left-color: #ef4444;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-right: 8px;
+        }
+
+        .badge-good {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .badge-bad {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .badge-grade {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .filters {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .filter-group label {
+            font-size: 14px;
+            color: #666;
+        }
+
+        select, input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        button {
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        button:hover {
+            background: #5568d3;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: #f9fafb;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #374151;
+            border-bottom: 2px solid #e5e7eb;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        th:hover {
+            background: #f3f4f6;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        tr:hover {
+            background: #f9fafb;
+        }
+
+        .risk-score {
+            font-weight: 600;
+        }
+
+        .risk-low {
+            color: #10b981;
+        }
+
+        .risk-medium {
+            color: #f59e0b;
+        }
+
+        .risk-high {
+            color: #ef4444;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #9ca3af;
+        }
+
+        @media (max-width: 1024px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏦 Loan Prediction Dashboard</h1>
+            <span id="connectionStatus" class="connection-status status-disconnected">Disconnected</span>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Predictions</div>
+                <div class="stat-value" id="totalPredictions">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Good Loans</div>
+                <div class="stat-value stat-good" id="goodLoans">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Bad Loans</div>
+                <div class="stat-value stat-bad" id="badLoans">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Risk Score</div>
+                <div class="stat-value" id="avgRisk">0.00</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Loan Amount</div>
+                <div class="stat-value" id="totalAmount">$0</div>
+            </div>
+        </div>
+
+        <div class="main-grid">
+            <div class="card">
+                <h2 class="card-title">🔔 Latest Predictions</h2>
+                <div id="latestPredictions">
+                    <div class="no-data">Waiting for predictions...</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">📊 Prediction History</h2>
+                
+                <div class="filters">
+                    <div class="filter-group">
+                        <label>Label:</label>
+                        <select id="labelFilter">
+                            <option value="all">All</option>
+                            <option value="Good">Good</option>
+                            <option value="Bad">Bad</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Sort by:</label>
+                        <select id="sortBy">
+                            <option value="timestamp">Time</option>
+                            <option value="risk_score">Risk Score</option>
+                            <option value="loan_amnt">Loan Amount</option>
+                            <option value="id">ID</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Order:</label>
+                        <select id="sortOrder">
+                            <option value="desc">Descending</option>
+                            <option value="asc">Ascending</option>
+                        </select>
+                    </div>
+                    <button onclick="loadHistory()">🔄 Refresh</button>
+                </div>
+
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th onclick="sortTable('id')">ID</th>
+                                <th onclick="sortTable('timestamp')">Time</th>
+                                <th onclick="sortTable('label')">Label</th>
+                                <th onclick="sortTable('risk_score')">Risk Score</th>
+                                <th onclick="sortTable('loan_amnt')">Amount</th>
+                                <th>Grade</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTable">
+                            <tr>
+                                <td colspan="7" class="no-data">Loading history...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let predictions = [];
+
+        // Connection status
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            document.getElementById('connectionStatus').textContent = 'Connected';
+            document.getElementById('connectionStatus').className = 'connection-status status-connected';
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+            document.getElementById('connectionStatus').textContent = 'Disconnected';
+            document.getElementById('connectionStatus').className = 'connection-status status-disconnected';
+        });
+
+        // Listen for new predictions
+        socket.on('new_prediction', (data) => {
+            console.log('New prediction:', data);
+            addLatestPrediction(data);
+            predictions.unshift(data);
+            updateHistoryTable();
+        });
+
+        // Listen for stats updates
+        socket.on('stats_update', (stats) => {
+            updateStats(stats);
+        });
+
+        // Listen for latest predictions on connect
+        socket.on('latest_predictions', (data) => {
+            data.forEach(pred => addLatestPrediction(pred));
+        });
+
+        function updateStats(stats) {
+            document.getElementById('totalPredictions').textContent = stats.total_predictions || 0;
+            document.getElementById('goodLoans').textContent = stats.good_loans || 0;
+            document.getElementById('badLoans').textContent = stats.bad_loans || 0;
+            document.getElementById('avgRisk').textContent = (stats.avg_risk_score || 0).toFixed(3);
+            document.getElementById('totalAmount').textContent = '$' + (stats.total_loan_amount || 0).toLocaleString('en-US', {maximumFractionDigits: 0});
+        }
+
+        function addLatestPrediction(data) {
+            const container = document.getElementById('latestPredictions');
+            
+            // Remove "no data" message
+            if (container.querySelector('.no-data')) {
+                container.innerHTML = '';
+            }
+
+            const item = document.createElement('div');
+            item.className = `latest-item ${data.label ? data.label.toLowerCase() : ''}`;
+            
+            const riskClass = data.risk_score >= 0.7 ? 'risk-high' : 
+                             data.risk_score >= 0.4 ? 'risk-medium' : 'risk-low';
+            
+            item.innerHTML = `
+                <div>
+                    <span class="badge ${data.label === 'Good' ? 'badge-good' : 'badge-bad'}">${data.label || 'N/A'}</span>
+                    <span class="badge badge-grade">Grade ${data.grade || 'N/A'}</span>
+                    <strong>ID: ${data.id}</strong>
+                </div>
+                <div style="margin-top: 8px; font-size: 14px; color: #666;">
+                    Amount: <strong>$${(data.loan_amnt || 0).toLocaleString()}</strong> | 
+                    Risk: <span class="risk-score ${riskClass}">${(data.risk_score * 100).toFixed(1)}%</span>
+                </div>
+                <div style="margin-top: 5px; font-size: 12px; color: #999;">
+                    ${data.timestamp_display || new Date().toLocaleString()}
+                </div>
+            `;
+            
+            container.insertBefore(item, container.firstChild);
+            
+            // Keep only 10 items
+            while (container.children.length > 10) {
+                container.removeChild(container.lastChild);
+            }
+        }
+
+        function loadHistory() {
+            const labelFilter = document.getElementById('labelFilter').value;
+            const sortBy = document.getElementById('sortBy').value;
+            const sortOrder = document.getElementById('sortOrder').value;
+            
+            fetch(`/api/predictions?label=${labelFilter}&sort_by=${sortBy}&sort_order=${sortOrder}&limit=100`)
+                .then(response => response.json())
+                .then(data => {
+                    predictions = data.predictions;
+                    updateHistoryTable();
+                })
+                .catch(error => {
+                    console.error('Error loading history:', error);
+                });
+        }
+
+        function updateHistoryTable() {
+            const tbody = document.getElementById('historyTable');
+            
+            if (predictions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="no-data">No predictions yet</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = predictions.map(pred => {
+                const riskClass = (pred.risk_score || 0) >= 0.7 ? 'risk-high' : 
+                                 (pred.risk_score || 0) >= 0.4 ? 'risk-medium' : 'risk-low';
+                
+                return `
+                    <tr>
+                        <td>${pred.id || 'N/A'}</td>
+                        <td>${pred.timestamp_display || 'N/A'}</td>
+                        <td>
+                            <span class="badge ${pred.label === 'Good' ? 'badge-good' : 'badge-bad'}">
+                                ${pred.label || 'N/A'}
+                            </span>
+                        </td>
+                        <td class="risk-score ${riskClass}">
+                            ${pred.risk_score ? (pred.risk_score * 100).toFixed(1) + '%' : 'N/A'}
+                        </td>
+                        <td>$${(pred.loan_amnt || 0).toLocaleString()}</td>
+                        <td><span class="badge badge-grade">${pred.grade || 'N/A'}</span></td>
+                        <td>${pred.status || 'N/A'}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function sortTable(column) {
+            document.getElementById('sortBy').value = column;
+            loadHistory();
+        }
+
+        // Load initial data
+        loadHistory();
+
+        // Auto-refresh stats every 30 seconds
+        setInterval(() => {
+            fetch('/api/stats')
+                .then(response => response.json())
+                .then(stats => updateStats(stats))
+                .catch(error => console.error('Error loading stats:', error));
+        }, 30000);
+
+        // Event listeners for filters
+        document.getElementById('labelFilter').addEventListener('change', loadHistory);
+        document.getElementById('sortBy').addEventListener('change', loadHistory);
+        document.getElementById('sortOrder').addEventListener('change', loadHistory);
+    </script>
+</body>
+</html>
