@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -250,13 +251,21 @@ def create_and_save_preprocessor(train_df, path="preprocessor.pkl", do_scale=Tru
     proc = LoanPreprocessor(do_scale=do_scale)
     proc.fit(train_df)
     joblib.dump(proc, path)
-    print(f"Preprocessor saved to {path}")
-    print(f"Feature names: {proc.feature_names_}")
-    print(f"Skewed columns (log-transformed): {proc.skewed_cols}")
-    print(f"Unskewed columns: {proc.unskewed_cols}")
-    print(f"Categorical columns: {proc.categorical_cols}")
-    return proc
 
 def load_preprocessor(path="preprocessor.pkl"):
     """Load saved preprocessor from disk"""
     return joblib.load(path)
+
+if __name__ == "__main__":
+    csv_path = '/home/jovyan/work/data/loan.csv'
+    output_path = "/home/jovyan/work/model/preprocessor.pkl"
+    if os.path.exists(csv_path):
+        try:
+            print(f"Đang đọc dữ liệu từ {csv_path}...")
+            df = pd.read_csv(csv_path)
+            create_and_save_preprocessor(df, path=output_path, do_scale=True)
+
+        except Exception as e:
+            print(f"Error: {e}")
+    else:
+        print(f"Error: Cann't find '{csv_path}'.")
