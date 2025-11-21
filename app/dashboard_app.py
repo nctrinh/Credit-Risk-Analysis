@@ -13,6 +13,23 @@ from collections import deque
 import time
 import logging
 import asyncio
+import numpy as np
+import pandas as pd
+from statistics import mean, stdev
+
+# Import chart utilities
+try:
+    from chart_utils import (
+        plot_loan_amount_distribution,
+        plot_risk_score_distribution,
+        plot_grade_distribution,
+    )
+except ImportError:
+    print("Warning: chart_utils not found. Chart functions will not be available.")
+    # Fallback functions nếu chart_utils không tồn tại
+    def plot_loan_amount_distribution(df): return {"labels": [], "data": []}
+    def plot_risk_score_distribution(df): return {"labels": [], "data": []}
+    def plot_grade_distribution(df): return {"labels": [], "data": []}
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -20,8 +37,8 @@ logger = logging.getLogger("FastAPI_App")
 
 # --- Cấu hình biến toàn cục ---
 # In-memory storage
-predictions_history = deque(maxlen=1000)
-latest_predictions = deque(maxlen=10)
+predictions_history = deque(maxlen=10000)  # Tăng từ 1000 lên 10000
+latest_predictions = deque(maxlen=5)
 stats = {
     "total_predictions": 0,
     "good_loans": 0,
@@ -41,10 +58,9 @@ consumer_running = False
 consumer_thread = None
 
 # --- Setup Socket.IO ---
-# Tạo Async Server cho SocketIO
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 
-# --- Kafka Consumer Logic (Giữ nguyên logic cũ) ---
+# --- Kafka Consumer Logic ---
 def create_kafka_consumer():
     """Tạo Kafka consumer với retry logic"""
     for server in KAFKA_BOOTSTRAP_SERVERS:
@@ -83,11 +99,8 @@ def kafka_consumer_worker():
         return
 
     try:
-        # Tạo event loop riêng cho thread này để emit socketio nếu cần (tùy chọn), 
-        # nhưng với python-socketio asgi, ta dùng method 'emit' thread-safe của nó.
         while consumer_running:
             try:
-                # Poll messages (thay vì loop for message in consumer để kiểm soát vòng lặp tốt hơn)
                 msg_pack = consumer.poll(timeout_ms=1000)
                 
                 for tp, messages in msg_pack.items():
@@ -134,28 +147,134 @@ def process_message(data):
         logger.info(f"New prediction: ID={data.get('id')}, Label={data.get('label')}")
 
         # Broadcast to clients via SocketIO
-        # Lưu ý: Hàm emit của python-socketio là async, nhưng ta đang ở trong thread đồng bộ.
-        # Ta dùng phương thức emit chạy background task hoặc loop.call_soon_threadsafe.
-        # Cách đơn giản nhất với python-socketio 5.x+:
         asyncio.run(sio.emit('new_prediction', data, namespace='/'))
         asyncio.run(sio.emit('stats_update', stats, namespace='/'))
 
     except Exception as e:
         logger.error(f"Error processing message: {e}")
 
-# --- Lifespan Manager (Startup/Shutdown) ---
+# --- Chart Data Calculation Functions ---
+
+def get_loan_amount_distribution(bins=10):
+    """Tính phân phối số tiền vay"""
+    if not predictions_history:
+        return {"labels": [], "data": []}
+    
+    amounts = [p.get("loan_amnt", 0) for p in predictions_history if p.get("loan_amnt")]
+    if not amounts:
+        return {"labels": [], "data": []}
+    
+    min_val, max_val = min(amounts), max(amounts)
+    bin_edges = np.linspace(min_val, max_val, bins + 1)
+    hist, _ = np.histogram(amounts, bins=bin_edges)
+    
+    labels = [f"${int(bin_edges[i]):,}-${int(bin_edges[i+1]):,}" for i in range(len(bin_edges)-1)]
+    
+    return {
+        "labels": labels,
+        "data": [int(h) for h in hist]
+    }
+
+def get_risk_score_distribution(bins=10):
+    """Tính phân phối điểm rủi ro"""
+    if not predictions_history:
+        return {"labels": [], "data": []}
+    
+    scores = [p.get("risk_score", 0) for p in predictions_history if p.get("risk_score") is not None]
+    if not scores:
+        return {"labels": [], "data": []}
+    
+    hist, bin_edges = np.histogram(scores, bins=bins, range=(0, 1))
+    labels = [f"{bin_edges[i]:.1f}-{bin_edges[i+1]:.1f}" for i in range(len(bin_edges)-1)]
+    
+    return {
+        "labels": labels,
+        "data": [int(h) for h in hist]
+    }
+
+def get_label_distribution():
+    """Tính phân phối Good/Bad loans"""
+    total = stats["total_predictions"]
+    if total == 0:
+        return {"labels": [], "data": []}
+    
+    return {
+        "labels": ["Good Loans", "Bad Loans"],
+        "data": [stats["good_loans"], stats["bad_loans"]],
+        "colors": ["#10b981", "#ef4444"]
+    }
+
+def get_grade_distribution():
+    """Tính phân phối theo grade (A, B, C, ...)"""
+    if not predictions_history:
+        return {"labels": [], "data": []}
+    
+    grades = {}
+    for p in predictions_history:
+        grade = p.get("grade", "N/A")
+        grades[grade] = grades.get(grade, 0) + 1
+    
+    sorted_grades = sorted(grades.items())
+    return {
+        "labels": [g[0] for g in sorted_grades],
+        "data": [g[1] for g in sorted_grades]
+    }
+
+def get_repayment_efficiency_distribution():
+    """Tính hiệu quả hoàn trả"""
+    if not predictions_history:
+        return {"labels": [], "data": []}
+    
+    efficiencies = []
+    for p in predictions_history:
+        total_pymnt = p.get("total_pymnt", 1)
+        total_rec_prncp = p.get("total_rec_prncp", 0)
+        if total_pymnt > 0:
+            eff = total_rec_prncp / total_pymnt
+            efficiencies.append(round(eff, 1))
+    
+    if not efficiencies:
+        return {"labels": [], "data": []}
+    
+    efficiency_counts = {}
+    for eff in efficiencies:
+        efficiency_counts[eff] = efficiency_counts.get(eff, 0) + 1
+    
+    sorted_eff = sorted(efficiency_counts.items())
+    return {
+        "labels": [str(e[0]) for e in sorted_eff],
+        "data": [e[1] for e in sorted_eff]
+    }
+
+def get_status_distribution():
+    """Tính phân phối trạng thái khoản vay"""
+    if not predictions_history:
+        return {"labels": [], "data": []}
+    
+    statuses = {}
+    for p in predictions_history:
+        status = p.get("status", "N/A")
+        statuses[status] = statuses.get(status, 0) + 1
+    
+    sorted_status = sorted(statuses.items(), key=lambda x: x[1], reverse=True)
+    return {
+        "labels": [s[0] for s in sorted_status],
+        "data": [s[1] for s in sorted_status]
+    }
+
+# --- Lifespan Manager ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Chạy Kafka Consumer Thread
+    # Startup
     global consumer_running, consumer_thread
     consumer_running = True
     consumer_thread = threading.Thread(target=kafka_consumer_worker, daemon=True)
     consumer_thread.start()
     logger.info("Kafka consumer thread started via Lifespan")
     
-    yield # Ứng dụng chạy tại đây
+    yield
     
-    # Shutdown: Dọn dẹp
+    # Shutdown
     logger.info("Shutting down, stopping consumer...")
     consumer_running = False
     if consumer_thread:
@@ -171,7 +290,7 @@ socket_app = socketio.ASGIApp(sio, app)
 # Templates
 templates = Jinja2Templates(directory="templates")
 
-# CORS (FastAPI middleware)
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -196,11 +315,13 @@ async def health_check():
 
 @app.get("/api/predictions")
 async def get_predictions(
-    limit: int = 100,
+    page: int = 1,
+    limit: int = 50,
     label: str = None,
     sort_by: str = 'timestamp',
     sort_order: str = 'desc'
 ):
+    """API với pagination"""
     data = list(predictions_history)
     
     # Filter
@@ -218,10 +339,16 @@ async def get_predictions(
     elif sort_by == 'id':
         data.sort(key=lambda x: x.get('id', 0), reverse=reverse)
     
-    data = data[:limit]
+    # Pagination
+    total = len(data)
+    skip = (page - 1) * limit
+    data = data[skip:skip + limit]
+    
     return {
-        "total": len(predictions_history),
-        "filtered": len(data),
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit,
         "predictions": data
     }
 
@@ -232,6 +359,20 @@ async def get_latest():
 @app.get("/api/stats")
 async def get_stats():
     return stats
+
+# --- Chart Data Endpoints ---
+
+@app.get("/api/charts/loan-distribution")
+async def chart_loan_distribution():
+    return get_loan_amount_distribution()
+
+@app.get("/api/charts/label-distribution")
+async def chart_label_distribution():
+    return get_label_distribution()
+
+@app.get("/api/charts/grade-distribution")
+async def chart_grade_distribution():
+    return get_grade_distribution()
 
 # --- Socket.IO Events ---
 
@@ -254,6 +395,5 @@ async def request_history(sid, data):
 # --- Entry Point ---
 if __name__ == "__main__":
     import uvicorn
-    # Chạy socket_app thay vì app
     logger.info("Starting FastAPI dashboard server on http://0.0.0.0:5000")
     uvicorn.run(socket_app, host="0.0.0.0", port=5000)
